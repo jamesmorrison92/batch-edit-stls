@@ -100,7 +100,7 @@ def decimate_and_rename(input_directory, output_directory, decimation_ratio, res
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Mass decimate and/or rename STL files using Blender.")
-    parser.add_argument("-i", "--input", required=True, help="Path to the input directory containing STL files.")
+    parser.add_argument("-i", "--input", help="Path to the input directory containing STL files. Defaults to the current working directory.")
     parser.add_argument("-o", "--output", default="decimate_output", help="Path to the output directory for storing processed STL files.")
     parser.add_argument("-d", "--decimation-ratio", type=float, help="Decimation ratio for the mesh.")
     parser.add_argument("-s", "--resize", type=float, help="Resize factor for the mesh.")
@@ -113,8 +113,8 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # If output directory is not provided, use the input directory
-    if args.output is None:
-        args.output = args.input
+    # If input directory is not provided, use the current working directory
+    if args.input is None:
+        args.input = os.getcwd()
 
     decimate_and_rename(args.input, args.output, args.decimation_ratio, args.resize, args.prepend, args.append, args.recursive)
