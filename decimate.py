@@ -2,6 +2,9 @@ import bpy
 import os
 import argparse
 import shutil
+import numpy as np
+from mathutils import Vector
+
 
 def process_stl(input_path, output_path, decimation_ratio, resize_factor):
     bpy.ops.object.select_all(action='DESELECT')
@@ -32,69 +35,133 @@ def process_stl(input_path, output_path, decimation_ratio, resize_factor):
         print(f"Skipping {input_path}: No valid mesh data found.")
 
 
-def decimate_and_rename(input_directory, output_directory, decimation_ratio, resize_factor, prepend_str, append_str, recursive):
+def get_oriented_bounding_box(obj):
+    # Convert object to numpy array of vertices
+    verts = np.array([obj.matrix_world @ Vector(v.co) for v in obj.data.vertices])
+
+    # Compute the covariance matrix and eigenvectors
+    cov_matrix = np.cov(verts.T)
+    eigvals, eigvecs = np.linalg.eigh(cov_matrix)
+
+    # Sort eigenvectors by eigenvalues
+    order = eigvals.argsort()[::-1]
+    eigvecs = eigvecs[:, order]
+
+    # Rotate the vertices to the principal component frame
+    rotated_verts = verts @ eigvecs
+
+    # Find the minimum and maximum points in the principal component frame
+    min_coords = rotated_verts.min(axis=0)
+    max_coords = rotated_verts.max(axis=0)
+
+    # Compute dimensions in the principal component frame
+    dimensions = max_coords - min_coords
+
+    return dimensions
+
+
+def get_axis_aligned_bounding_box(obj):
+    local_coords = np.array([v.co for v in obj.data.vertices])
+    dimensions = local_coords.max(axis=0) - local_coords.min(axis=0)
+    return dimensions
+
+
+def process_and_write_dimensions(input_directory, output_directory, decimation_ratio, resize_factor, prepend_str, append_str, recursive, dimensions_flag, dimension_method):
     use_blender = decimation_ratio is not None or resize_factor is not None
+    dimension_lines = []
 
     if recursive:
         for root, dirs, files in os.walk(input_directory):
             for filename in files:
                 if filename.endswith(".stl"):
                     input_path = os.path.join(root, filename)
-                    # Create a relative path from the input directory
                     relative_path = os.path.relpath(input_path, input_directory)
-
-                    # Use 'low-poly' directory in the output directory if provided
                     output_path = os.path.join(output_directory, relative_path)
-
-                    # Create output directory structure if not exists
                     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                    # Extract file name and extension
                     base_filename, ext = os.path.splitext(filename)
-
-                    # Modify the base filename with prepend and/or append strings
                     if prepend_str is not None:
                         base_filename = prepend_str + base_filename
                     if append_str is not None:
                         base_filename = base_filename + append_str
-
-                    # Construct the final output path
                     new_output_path = os.path.join(os.path.dirname(output_path), base_filename + ext)
 
-                    if use_blender:
-                        process_stl(input_path, new_output_path, decimation_ratio, resize_factor)
-                    else:
-                        shutil.copy(input_path, new_output_path)
+                    bpy.ops.object.select_all(action='DESELECT')
+                    bpy.ops.object.select_by_type(type='MESH')
+                    bpy.ops.object.delete()
+                    bpy.ops.import_mesh.stl(filepath=input_path)
+                    if bpy.context.selected_objects:
+                        obj = bpy.context.selected_objects[0]
+
+                        # Apply the modifications
+                        if use_blender:
+                            if decimation_ratio is not None:
+                                bpy.ops.object.modifier_add(type='DECIMATE')
+                                bpy.context.object.modifiers["Decimate"].ratio = decimation_ratio
+                            if resize_factor is not None:
+                                bpy.ops.transform.resize(value=(resize_factor, resize_factor, resize_factor))
+                            bpy.ops.object.convert(target='MESH')
+
+                        # Compute dimensions based on the chosen method
+                        if dimension_method == "obb":
+                            dimensions = get_oriented_bounding_box(obj)
+                        else:
+                            dimensions = get_axis_aligned_bounding_box(obj) * (resize_factor if resize_factor is not None else 1)
+
+                        dimension_lines.append(f"{filename}: {dimensions[0]:.3f}, {dimensions[1]:.3f}, {dimensions[2]:.3f}")
+
+                        if use_blender:
+                            process_stl(input_path, new_output_path, decimation_ratio, resize_factor)
+                        else:
+                            shutil.copy(input_path, new_output_path)
 
     else:
         files = [f for f in os.listdir(input_directory) if f.endswith(".stl")]
         for filename in files:
             input_path = os.path.join(input_directory, filename)
-            # Create a relative path from the input directory
             relative_path = os.path.relpath(input_path, input_directory)
-
-            # Set output path
             output_path = os.path.join(output_directory, relative_path)
-
-            # Create output directory structure if not exists
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Extract file name and extension
             base_filename, ext = os.path.splitext(filename)
-
-            # Modify the base filename with prepend and/or append strings
             if prepend_str is not None:
                 base_filename = prepend_str + base_filename
             if append_str is not None:
                 base_filename = base_filename + append_str
-
-            # Construct the final output path
             new_output_path = os.path.join(os.path.dirname(output_path), base_filename + ext)
 
-            if use_blender:
-                process_stl(input_path, new_output_path, decimation_ratio, resize_factor)
-            else:
-                shutil.copy(input_path, new_output_path)
+            bpy.ops.object.select_all(action='DESELECT')
+            bpy.ops.object.select_by_type(type='MESH')
+            bpy.ops.object.delete()
+            bpy.ops.import_mesh.stl(filepath=input_path)
+            if bpy.context.selected_objects:
+                obj = bpy.context.selected_objects[0]
+
+                # Apply the modifications
+                if use_blender:
+                    if decimation_ratio is not None:
+                        bpy.ops.object.modifier_add(type='DECIMATE')
+                        bpy.context.object.modifiers["Decimate"].ratio = decimation_ratio
+                    if resize_factor is not None:
+                        bpy.ops.transform.resize(value=(resize_factor, resize_factor, resize_factor))
+                    bpy.ops.object.convert(target='MESH')
+
+                # Compute dimensions based on the chosen method
+                if dimension_method == "obb":
+                    dimensions = get_oriented_bounding_box(obj)
+                else:
+                    dimensions = get_axis_aligned_bounding_box(obj) * (resize_factor if resize_factor is not None else 1)
+
+                dimension_lines.append(f"{filename}: {dimensions[0]:.3f}, {dimensions[1]:.3f}, {dimensions[2]:.3f}")
+
+                if use_blender:
+                    process_stl(input_path, new_output_path, decimation_ratio, resize_factor)
+                else:
+                    shutil.copy(input_path, new_output_path)
+
+    if dimensions_flag and dimension_lines:
+        dimensions_file_path = os.path.join(output_directory, "dimensions.txt")
+        with open(dimensions_file_path, 'w') as f:
+            f.write("\n".join(dimension_lines))
+
     print("Done.")
 
 
@@ -107,6 +174,8 @@ def parse_args():
     parser.add_argument("-p", "--prepend", help="String to be prepended to the file name.")
     parser.add_argument("-a", "--append", help="String to be appended to the file name.")
     parser.add_argument("-r", "--recursive", action="store_true", help="Recursively process all STL files in child directories.")
+    parser.add_argument("--dimensions", action="store_true", help="Output a .txt file with the dimensions of each model.")
+    parser.add_argument("--dimension-method", choices=["obb", "axis-aligned"], default="axis-aligned", help="Method to compute dimensions: 'obb' (Oriented Bounding Box) or 'axis-aligned' (Axis-Aligned Bounding Box).")
 
     return parser.parse_args()
 
@@ -117,4 +186,4 @@ if __name__ == "__main__":
     if args.input is None:
         args.input = os.getcwd()
 
-    decimate_and_rename(args.input, args.output, args.decimation_ratio, args.resize, args.prepend, args.append, args.recursive)
+    process_and_write_dimensions(args.input, args.output, args.decimation_ratio, args.resize, args.prepend, args.append, args.recursive, args.dimensions, args.dimension_method)
